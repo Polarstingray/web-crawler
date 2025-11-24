@@ -61,5 +61,5 @@ crawl(INIT_URL)
 
 if args.verbose :
     for match in matches :
-        print(match)
+        print(f"MATCH: {match}")
 print(f'Found {len(matches)} matches!')
