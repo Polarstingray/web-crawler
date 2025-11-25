@@ -14,6 +14,7 @@ parser.add_argument("url", help="base url where search begins")
 parser.add_argument("-p", "--pattern", help="regex pattern to search for", required=True)
 parser.add_argument('-v', '--verbose', action='store_true')
 parser.add_argument('-t', '--torrent', action='store_true', help="find magnet links from each matched url")
+parser.add_argument('-d', '--depth', help='specifies maximum depth')
 
 args = parser.parse_args()
 
@@ -24,12 +25,16 @@ visited = set()
 
 # global set of matches, shouldn't have duplicates by its construction
 matches = []
-
-MAX_CRAWL = -1
+MAX_DEPTH = 2000
+if args.depth :
+    try :
+        MAX_DEPTH = int(args.depth)
+    except ValueError :
+        print(f"[WARN!] --depth requires an integer value, using default {MAX_DEPTH}.")
 
 print(INIT_URL)
 
-def crawl(url) :
+def crawl(url, depth=0, limit=MAX_DEPTH) :
     if url in visited :
         return 
     
@@ -59,7 +64,10 @@ def crawl(url) :
             matches.append(abs_url)
             print("MATCH: "+abs_url)
         if abs_url.startswith(INIT_URL) :
-            crawl(abs_url)        
+            if (depth >= limit) :
+                continue
+            depth += 1
+            crawl(abs_url, depth)        
 
 def torrent(content) :
     magnets = set()
@@ -83,7 +91,7 @@ def torrent(content) :
 if __name__ == "__main__" :
     print(f"starting web at {INIT_URL}")
     crawl(INIT_URL)
-
+    
     if args.verbose :
         for match in matches :
             print(f"MATCH: {match}")
