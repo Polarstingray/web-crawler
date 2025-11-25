@@ -1,5 +1,5 @@
 
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse, urlunparse, parse_qsl, urlencode
 import requests
 from bs4 import BeautifulSoup
 import re
@@ -32,12 +32,49 @@ if args.depth :
     except ValueError :
         print(f"[WARN!] --depth requires an integer value, using default {MAX_DEPTH}.")
 
-print(INIT_URL)
+
+IGNORED_QUERY_PARAMS = {
+    'utm_source', 'utm_medium', 'utm_campaign',
+    'gclid', 'fbclid', 'ref', 'sessionid'
+}
+
+def normalize(url) :
+    parsed_url = urlparse(url)
+
+    scheme = parsed_url.scheme
+
+    netloc = parsed_url.netloc.lower()
+
+    if (scheme == "http") and netloc.endswith(":80") :
+        netloc = netloc[:-3]
+    elif (scheme == "https") and netloc.endswith(":443") :
+        netloc = netloc[:-4]
+
+    path = parsed_url.path.rstrip('/') 
+
+    query_pairs = parse_qsl(parsed_url.query, keep_blank_values=True)
+
+    filtered = [
+        (k, v)
+        for k, v in query_pairs
+        if k not in IGNORED_QUERY_PARAMS
+    ]
+
+    # Sort alphabetically
+    filtered.sort()
+
+    query = urlencode(filtered)
+    
+    return urlunparse((scheme, netloc, path, "", query, ""))
+
 
 def crawl(url, depth=0, limit=MAX_DEPTH) :
+    url = normalize(url)
     if url in visited :
-        return 
+        return
     
+
+
     visited.add(url)
     if args.verbose :
         print(f'crawling: {url}')
@@ -63,6 +100,7 @@ def crawl(url, depth=0, limit=MAX_DEPTH) :
         if PATTERN.search(abs_url) and abs_url not in matches: 
             matches.append(abs_url)
             print("MATCH: "+abs_url)
+
         if abs_url.startswith(INIT_URL) :
             if (depth >= limit) :
                 continue
