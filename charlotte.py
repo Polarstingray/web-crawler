@@ -13,6 +13,7 @@ parser = argparse.ArgumentParser(
 parser.add_argument("url", help="base url where search begins")
 parser.add_argument("-p", "--pattern", help="regex pattern to search for", required=True)
 parser.add_argument('-v', '--verbose', action='store_true')
+parser.add_argument('-t', '--torrent', action='store_true', help="find magnet links from each matched url")
 
 args = parser.parse_args()
 
@@ -20,7 +21,11 @@ args = parser.parse_args()
 INIT_URL = args.url
 PATTERN = re.compile(args.pattern.replace("d+", r"(\d+)"))
 visited = set()
+
+# global set of matches, shouldn't have duplicates by its construction
 matches = []
+
+MAX_CRAWL = -1
 
 print(INIT_URL)
 
@@ -56,10 +61,34 @@ def crawl(url) :
         if abs_url.startswith(INIT_URL) :
             crawl(abs_url)        
 
-print(f"starting web at {INIT_URL}")
-crawl(INIT_URL)
+def torrent(content) :
+    magnets = set()
+    for link in content :
+        try :
+            resp = requests.get(link, timeout=3)
+        except :
+            continue
+        if "text/html" not in resp.headers.get("content-type", ""):
+            break
+        
+        soup = BeautifulSoup(resp.text, "html.parser")
+        for a in soup.find_all("a") :
+            href = a.get("href")
+            if href.startswith("magnet:") :
+                magnets.add(href)
+                print(f"{href}\n")
+    return magnets    
 
-if args.verbose :
-    for match in matches :
-        print(f"MATCH: {match}")
-print(f'Found {len(matches)} matches!')
+
+if __name__ == "__main__" :
+    print(f"starting web at {INIT_URL}")
+    crawl(INIT_URL)
+
+    if args.verbose :
+        for match in matches :
+            print(f"MATCH: {match}")
+    print(f'Found {len(matches)} matches!')
+
+    if args.torrent :
+        magnets = torrent(matches)
+        print(f"Found {len(magnets)} torrents!")
