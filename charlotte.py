@@ -1,9 +1,13 @@
 
+from time import sleep
+import time
 from urllib.parse import urljoin, urlparse, urlunparse, parse_qsl, urlencode
 import requests
 from bs4 import BeautifulSoup
 import re
 import argparse
+from concurrent.futures import ThreadPoolExecutor
+from collections import deque
 
 parser = argparse.ArgumentParser(
     prog="charlotte",
@@ -35,7 +39,7 @@ if args.depth :
 
 IGNORED_QUERY_PARAMS = {
     'utm_source', 'utm_medium', 'utm_campaign',
-    'gclid', 'fbclid', 'ref', 'sessionid'
+    'gclid', 'fbclid', 'ref', 'sessionid', 'category'
 }
 
 def normalize(url) :
@@ -68,13 +72,53 @@ def normalize(url) :
     return urlunparse((scheme, netloc, path, "", query, ""))
 
 
-def crawl(url, depth=0, limit=MAX_DEPTH) :
+def crawl(url, limit=MAX_DEPTH) :
+    depth=0
+    tasks = deque()
+    tasks.append((url, depth))
+    matches = []
+    while tasks :
+        url, depth = tasks.popleft()
+        url = normalize(url)
+        if url in visited :
+            continue
+
+        visited.add(url)
+        if args.verbose : print(f'crawling: {url}')
+
+        try : resp = requests.get(url, timeout=3)
+        except : continue
+
+        if "text/html" not in resp.headers.get("content-type", ""):
+            continue
+        
+        soup = BeautifulSoup(resp.text, "html.parser")
+        for a in soup.find_all("a") :
+            href = a.get('href')
+            if not href :
+                continue
+        
+            abs_url = urljoin(url, href)
+
+            if args.verbose : print(abs_url)
+
+            if PATTERN.search(abs_url) and abs_url not in matches: 
+                matches.append(abs_url)
+                print("MATCH: "+abs_url)
+
+            if abs_url.startswith(INIT_URL) :
+                if (depth >= limit) :
+                    print("max depth")
+                    continue
+                tasks.append((abs_url, depth + 1))
+    return matches
+
+
+def rec_crawl(url, depth=0, limit=MAX_DEPTH) :
     url = normalize(url)
     if url in visited :
         return
     
-
-
     visited.add(url)
     if args.verbose :
         print(f'crawling: {url}')
@@ -105,7 +149,7 @@ def crawl(url, depth=0, limit=MAX_DEPTH) :
             if (depth >= limit) :
                 continue
             depth += 1
-            crawl(abs_url, depth)        
+            rec_crawl(abs_url, depth) 
 
 def torrent(content) :
     magnets = set()
@@ -115,7 +159,7 @@ def torrent(content) :
         except :
             continue
         if "text/html" not in resp.headers.get("content-type", ""):
-            break
+            continue
         
         soup = BeautifulSoup(resp.text, "html.parser")
         for a in soup.find_all("a") :
@@ -127,12 +171,21 @@ def torrent(content) :
 
 
 if __name__ == "__main__" :
+
+    start_time = time.perf_counter()
+
     print(f"starting web at {INIT_URL}")
-    crawl(INIT_URL)
-    
+    matches_ = crawl(INIT_URL) 
+
+    if not matches : matches = matches_ 
+
+    end_time = time.perf_counter()
+
+    elapsed_time = end_time - start_time
     if args.verbose :
         for match in matches :
             print(f"MATCH: {match}")
+        print(f"took {elapsed_time} seconds")
     print(f'Found {len(matches)} matches!')
 
     if args.torrent :
