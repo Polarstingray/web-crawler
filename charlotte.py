@@ -1,73 +1,32 @@
 
 from time import sleep
 import time
-from urllib.parse import urljoin, urlparse, urlunparse, parse_qsl, urlencode
+from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
-import re
-import argparse
 from concurrent.futures import ThreadPoolExecutor
 import queue
 import threading
 
-parser = argparse.ArgumentParser(
-    prog="charlotte",
-    description="web-crawler that recursively searches for patterns on a domain."
-)   
-
-parser.add_argument("url", help="base url where search begins")
-parser.add_argument("-p", "--pattern", help="regex pattern to search for", required=True)
-parser.add_argument('-v', '--verbose', action='store_true')
-parser.add_argument('-t', '--torrent', action='store_true', help="find magnet links from each matched url")
-parser.add_argument('-d', '--depth', help='specifies maximum depth')
-
-args = parser.parse_args()
-
-INIT_URL = args.url
-PATTERN = re.compile(args.pattern.replace("d+", r"(\d+)"))
-visited = set()
+from torrent import Torrent
+import config
+from config import args
+from validate import Validation
 
 # global set of matches, shouldn't have duplicates by its construction
 matches = []
-MAX_DEPTH = 2000
-if args.depth :
-    try : MAX_DEPTH = int(args.depth)
-    except ValueError : print(f"[WARN!] --depth requires an integer value, using default {MAX_DEPTH}.")
+visited = set()
 
-
-IGNORED_QUERY_PARAMS = {
-    'utm_source', 'utm_medium', 'utm_campaign',
-    'gclid', 'fbclid', 'ref', 'sessionid', 'category'
-}
-
-def normalize(url) :
-    parsed_url = urlparse(url)
-    scheme = parsed_url.scheme
-    netloc = parsed_url.netloc.lower()
-
-    if (scheme == "http") and netloc.endswith(":80") : netloc = netloc[:-3]
-    elif (scheme == "https") and netloc.endswith(":443") : netloc = netloc[:-4]
-
-    path = parsed_url.path.rstrip('/') 
-    query_pairs = parse_qsl(parsed_url.query, keep_blank_values=True)
-    filtered = [
-        (k, v)
-        for k, v in query_pairs
-        if k not in IGNORED_QUERY_PARAMS
-    ]
-    filtered.sort()
-    query = urlencode(filtered)
-    return urlunparse((scheme, netloc, path, "", query, ""))
-
-def crawl(url=INIT_URL, visited=visited, matches=matches, limit=MAX_DEPTH) :
+def crawl(url=config.INIT_URL, visited=visited, matches=matches, limit=config.MAX_DEPTH) :
     lock = threading.Lock()
     tasks = queue.Queue()
+    url = Validation.normalize(url)
     tasks.put((url, 0))
     with lock :
         visited.add(url)
     futures = []
-    with ThreadPoolExecutor(max_workers=5) as executor :
-        for _ in range(5) :
+    with ThreadPoolExecutor(max_workers=config.NUM_WORKERS) as executor :
+        for _ in range(config.NUM_WORKERS) :
             futures.append(executor.submit(worker, tasks, limit, visited, matches, lock))
         tasks.join()
     return
@@ -75,12 +34,12 @@ def crawl(url=INIT_URL, visited=visited, matches=matches, limit=MAX_DEPTH) :
 def worker(tasks, limit, visited, matches, lock) :
     while True :
         try :
-            if (args.verbose) : print("getting task", flush=True)
             url, depth = tasks.get(timeout=1)
+            if (args.verbose) : print("getting task", flush=True), print(f"depth: {depth}")
         except queue.Empty:
             return
-
-        sub_pages = process_page(normalize(url), matches, lock)
+        
+        sub_pages = process_page(Validation.normalize(url), matches, lock)
         if sub_pages and depth < limit :
             for url in sub_pages :
                 if depth + 1 <= limit :
@@ -112,20 +71,20 @@ def process_page(url, matches, lock) :
         href = a.get('href')
         if not href :
             continue
-        abs_url = normalize(urljoin(url, href))
+        abs_url = Validation.normalize(urljoin(url, href))
         if args.verbose : print(abs_url)
-        if PATTERN.search(abs_url) and abs_url: 
+        if config.PATTERN.search(abs_url) and abs_url: 
             with lock :
                 matches.append(abs_url)
                 print("MATCH: "+abs_url, flush=True)
-        elif abs_url.startswith(INIT_URL) :
+        elif abs_url.startswith(config.INIT_URL) :
             sub_pages.append(abs_url)
     return sub_pages
-        
 
 
-def rec_crawl(url, depth=0, limit=MAX_DEPTH) :
-    url = normalize(url)
+
+def rec_crawl(url, depth=0, limit=config.MAX_DEPTH) :
+    url = Validation.normalize(url)
     if url in visited :
         return
     
@@ -151,53 +110,36 @@ def rec_crawl(url, depth=0, limit=MAX_DEPTH) :
         if args.verbose :
             print(abs_url)
 
-        if PATTERN.search(abs_url) and abs_url not in matches: 
+        if config.PATTERN.search(abs_url) and abs_url not in matches: 
             matches.append(abs_url)
             print("MATCH: "+abs_url)
 
-        if abs_url.startswith(INIT_URL) :
+        if abs_url.startswith(config.INIT_URL) :
             if (depth >= limit) :
                 continue
             depth += 1
             rec_crawl(abs_url, depth) 
-
-def torrent(content) :
-    magnets = set()
-    for link in content :
-        try :
-            resp = requests.get(link, timeout=3)
-        except :
-            continue
-        if "text/html" not in resp.headers.get("content-type", ""):
-            continue
-        
-        soup = BeautifulSoup(resp.text, "html.parser")
-        for a in soup.find_all("a") :
-            href = a.get("href")
-            if href.startswith("magnet:") :
-                magnets.add(href)
-                print(f"{href}\n")
-    return magnets    
+ 
 
 
 if __name__ == "__main__" :
-
     start_time = time.perf_counter()
 
-    print(f"starting web at {INIT_URL}")
-    crawl(INIT_URL) 
+    print(f"starting web at {config.INIT_URL}")
+    crawl(config.INIT_URL) 
 
     depth = len(visited)
 
     end_time = time.perf_counter()
-
     elapsed_time = end_time - start_time
+
     if args.verbose :
         for match in matches :
             print(f"MATCH: {match}")
         print(f"took {elapsed_time} seconds")
     print(f'Found {len(matches)} matches!')
 
+
     if args.torrent :
-        magnets = torrent(matches)
+        magnets = Torrent.find_magnets(matches)
         print(f"Found {len(magnets)} torrents!")
